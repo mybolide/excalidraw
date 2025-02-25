@@ -15,7 +15,7 @@ import {
 import BinaryHeap from "../binaryheap";
 import { getSizeFromPoints } from "../points";
 import { aabbForElement, pointInsideBounds } from "../shapes";
-import { invariant, isAnyTrue, toBrandedType, tupleToCoors } from "../utils";
+import { invariant, isAnyTrue, tupleToCoors } from "../utils";
 import type { AppState } from "../types";
 import {
   bindPointToSnapToElementOutline,
@@ -54,6 +54,7 @@ import type {
   ExcalidrawBindableElement,
   FixedPointBinding,
   FixedSegment,
+  NonDeletedExcalidrawElement,
 } from "./types";
 
 type GridAddress = [number, number] & { _brand: "gridaddress" };
@@ -102,7 +103,7 @@ export const BASE_PADDING = 40;
 
 const handleSegmentRenormalization = (
   arrow: ExcalidrawElbowArrowElement,
-  elementsMap: NonDeletedSceneElementsMap | SceneElementsMap,
+  elementsMap: NonDeletedSceneElementsMap,
 ) => {
   const nextFixedSegments: FixedSegment[] | null = arrow.fixedSegments
     ? arrow.fixedSegments.slice()
@@ -272,7 +273,7 @@ const handleSegmentRenormalization = (
 const handleSegmentRelease = (
   arrow: ExcalidrawElbowArrowElement,
   fixedSegments: readonly FixedSegment[],
-  elementsMap: NonDeletedSceneElementsMap | SceneElementsMap,
+  elementsMap: NonDeletedSceneElementsMap,
 ) => {
   const newFixedSegmentIndices = fixedSegments.map((segment) => segment.index);
   const oldFixedSegmentIndices =
@@ -312,6 +313,7 @@ const handleSegmentRelease = (
       endBinding: nextSegment ? null : arrow.endBinding,
       startArrowhead: null,
       endArrowhead: null,
+      points: arrow.points,
     },
     elementsMap,
     [
@@ -871,7 +873,7 @@ const MAX_POS = 1e6;
  */
 export const updateElbowArrowPoints = (
   arrow: Readonly<ExcalidrawElbowArrowElement>,
-  elementsMap: NonDeletedSceneElementsMap | SceneElementsMap,
+  elementsMap: NonDeletedSceneElementsMap,
   updates: {
     points?: readonly LocalPoint[];
     fixedSegments?: FixedSegment[] | null;
@@ -1016,6 +1018,7 @@ export const updateElbowArrowPoints = (
           : arrow.endBinding,
       startArrowhead: arrow.startArrowhead,
       endArrowhead: arrow.endArrowhead,
+      points: arrow.points,
     },
     elementsMap,
     updatedPoints,
@@ -1146,8 +1149,9 @@ const getElbowArrowData = (
     endBinding: FixedPointBinding | null;
     startArrowhead: Arrowhead | null;
     endArrowhead: Arrowhead | null;
+    points: readonly LocalPoint[];
   },
-  elementsMap: NonDeletedSceneElementsMap | SceneElementsMap,
+  elementsMap: NonDeletedSceneElementsMap,
   nextPoints: readonly LocalPoint[],
   options?: {
     isDragging?: boolean;
@@ -1168,14 +1172,40 @@ const getElbowArrowData = (
   const endElement =
     arrow.endBinding &&
     getBindableElementForId(arrow.endBinding.elementId, elementsMap);
-  const [hoveredStartElement, hoveredEndElement] = options?.isDragging
-    ? getHoveredElements(
+
+  let hoveredStartElement = startElement;
+  let hoveredEndElement = endElement;
+  if (options?.isDragging) {
+    const isEndDragged =
+      Math.abs(
+        arrow.x +
+          arrow.points[arrow.points.length - 1][0] -
+          (arrow.x + nextPoints[nextPoints.length - 1][0]),
+      ) > 0 ||
+      Math.abs(
+        arrow.y +
+          arrow.points[arrow.points.length - 1][1] -
+          (arrow.y + nextPoints[nextPoints.length - 1][1]),
+      ) > 0;
+    const elements = Array.from(elementsMap.values());
+    if (!isEndDragged) {
+      hoveredStartElement = getHoveredElement(
         origStartGlobalPoint,
+        elementsMap,
+        elements,
+        options?.zoom,
+      );
+    }
+    if (isEndDragged) {
+      hoveredEndElement = getHoveredElement(
         origEndGlobalPoint,
         elementsMap,
+        elements,
         options?.zoom,
-      )
-    : [startElement, endElement];
+      );
+    }
+  }
+
   const startGlobalPoint = getGlobalPoint(
     arrow.startBinding?.fixedPoint,
     origStartGlobalPoint,
@@ -2209,36 +2239,20 @@ const getBindPointHeading = (
     origPoint,
   );
 
-const getHoveredElements = (
-  origStartGlobalPoint: GlobalPoint,
-  origEndGlobalPoint: GlobalPoint,
-  elementsMap: NonDeletedSceneElementsMap | SceneElementsMap,
+const getHoveredElement = (
+  origPoint: GlobalPoint,
+  elementsMap: NonDeletedSceneElementsMap,
+  elements: readonly NonDeletedExcalidrawElement[],
   zoom?: AppState["zoom"],
 ) => {
-  // TODO: Might be a performance bottleneck and the Map type
-  // remembers the insertion order anyway...
-  const nonDeletedSceneElementsMap = toBrandedType<NonDeletedSceneElementsMap>(
-    new Map([...elementsMap].filter((el) => !el[1].isDeleted)),
+  return getHoveredElementForBinding(
+    tupleToCoors(origPoint),
+    elements,
+    elementsMap,
+    zoom,
+    true,
+    true,
   );
-  const elements = Array.from(elementsMap.values());
-  return [
-    getHoveredElementForBinding(
-      tupleToCoors(origStartGlobalPoint),
-      elements,
-      nonDeletedSceneElementsMap,
-      zoom,
-      true,
-      true,
-    ),
-    getHoveredElementForBinding(
-      tupleToCoors(origEndGlobalPoint),
-      elements,
-      nonDeletedSceneElementsMap,
-      zoom,
-      true,
-      true,
-    ),
-  ];
 };
 
 const gridAddressesEqual = (a: GridAddress, b: GridAddress): boolean =>
